@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mari AI</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0b0b12;
+      color: #eee;
+      margin: 0;
+      padding: 20px;
+    }
+    h2 { color: #9cf; margin-bottom: 10px; }
+    #msgs {
+      height: 300px; overflow-y: auto; border: 1px solid #444;
+      padding: 10px; margin-bottom: 10px; border-radius: 8px; background: #111827;
+    }
+    .me { color: #4ade80; }
+    .sys { color: #38bdf8; }
+    .input-area {
+      display: flex; gap: 5px; margin-bottom: 10px;
+    }
+    .input-area input {
+      flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #555;
+      background: #1e1e2e; color: #eee;
+    }
+    .input-area button {
+      padding: 8px 12px; border-radius: 6px; border: none; cursor: pointer;
+      background: #2563eb; color: white; transition: 0.2s;
+    }
+    .input-area button:hover { background: #1e40af; }
+    #dlg {
+      display: none; position: fixed; top: 15%; left: 25%; background: #222;
+      padding: 15px; border: 1px solid #555; border-radius: 8px; z-index: 100; min-width: 280px;
+    }
+    #painel, #painelDiag {
+      display: none; margin-top: 10px; border: 1px solid #444; border-radius: 8px;
+      background: #111827; padding: 10px;
+    }
+    #painel h3, #painelDiag h3 { margin: 6px 0; }
+    #buffsAtivos { color: #4ade80; }
+    #buffsErro { color: #f87171; }
+    .note { font-size: 12px; color: #a3a3a3; }
+    .tag { padding: 2px 6px; border: 1px solid #333; border-radius: 6px; font-size: 12px; margin-left: 6px; color: #9cf;}
+  </style>
+</head>
+<body>
+  <h2>Mari AI <span id="verTag" class="tag">core v1.0</span></h2>
+
+  <!-- Chat -->
+  <div id="msgs"></div>
+
+  <div class="input-area">
+    <input id="text" type="text" placeholder="Digite aqui..." />
+    <button id="send">Enviar</button>
+    <button id="btnMic">🎤</button>
+    <button id="btnMenu">☰</button>
+  </div>
+
+  <!-- Painel de Buffs -->
+  <div id="painel">
+    <h3>📦 Buffs Ativos</h3>
+    <div id="buffsAtivos">Nenhum ativo</div>
+
+    <h3>⚠️ Buffs com Erro</h3>
+    <div id="buffsErro">Nenhum com erro</div>
+    <p class="note">Use <b>/buffs</b> para listar no chat, <b>/del &lt;id&gt;</b> para remover um buff do Firebase e local.</p>
+  </div>
+
+  <!-- Painel Diagnóstico -->
+  <div id="painelDiag">
+    <h3>📊 Diagnóstico</h3>
+    <div id="diagInfo">Nenhum dado ainda</div>
+    <p class="note">Use <b>/sync</b> para forçar sincronização com o Firebase.</p>
+  </div>
+
+  <!-- Janela Menu -->
+  <div id="dlg">
+    <button id="closeDlg">Fechar</button>
+    <p>Menu de opções:</p>
+    <button id="btnPickAvatar">Trocar Avatar</button><br><br>
+    <button id="btnBuffs">📦 Buffs (0/0)</button><br><br>
+    <button id="btnDiag">📊 Diagnóstico</button><br><br>
+    <img id="avatarImg" src="" width="100" alt="avatar"><br>
+    <input id="avatarInput" type="file" accept="image/*" style="display:none">
+  </div>
+
+  <!-- Firebase v8 -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+  <script>
+    // =============================
+    // === VARIÁVEIS GLOBAIS    ===
+    // =============================
+    let dlg, closeDlg, msgs, text, send, btnMic, btnMenu;
+    let avatarImg, avatarInput, btnPickAvatar, btnBuffs, btnDiag;
+    let rec;
+
+    // Estado & buffers
+    let buffsAtivos = []; // nomes/descrições para UI
+    let buffsErro = [];
+    let pendingCode = null;
+
+    // Sync / Diagnóstico
+    let firebaseConfigured = false;
+    let db = null;
+    let lastSync = null;
+    const MARI_NS = "mari";              // namespace raiz
+    const BUFFS_PATH = `${MARI_NS}/buffs`; // caminho no RTDB
+    const DEVICE_ID = getOrMakeDeviceId(); // id local p/ distinguir origem
+    const CORE_VERSION = "1.0";
+
+    // =============================
+    // ===== UTIL / STORAGE ========
+    // =============================
+    function salvarHistorico() {
+      try { localStorage.setItem("MariHistorico", msgs.innerHTML); } catch(_) {}
+    }
+    function carregarHistorico() {
+      const hist = localStorage.getItem("MariHistorico");
+      if (hist) msgs.innerHTML = hist;
+    }
+    function getOrMakeDeviceId() {
+      let id = localStorage.getItem("MariDeviceId");
+      if (!id) {
+        id = "dev-" + Math.random().toString(36).slice(2) + "-" + Date.now();
+        localStorage.setItem("MariDeviceId", id);
+      }
+      return id;
+    }
+    function uid() {
+      return "buff-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+
+    // =============================
+    // ===== MENSAGENS / TTS =======
+    // =============================
+    function appendMsg(cl, txt) {
+      const p = document.createElement("p");
+      p.className = cl;
+      p.textContent = txt;
+      msgs.appendChild(p);
+      msgs.scrollTop = msgs.scrollHeight;
+      salvarHistorico();
+    }
+    function me(txt) { appendMsg("me", "Você: " + txt); }
+    function sys(txt) {
+      appendMsg("sys", "Mari: " + txt);
+      falar(txt);
+    }
+    function falar(txt) {
+      if ('speechSynthesis' in window) {
+        const utter = new SpeechSynthesisUtterance(txt);
+        utter.lang = "pt-BR";
+        speechSynthesis.speak(utter);
+      }
+    }
+
+    // =============================
+    // ======= AVATAR UI ===========
+    // =============================
+    function setAvatarFromLS() {
+      const saved = localStorage.getItem("MariAvatar");
+      if (saved) avatarImg.src = saved;
+    }
+
+    // =============================
+    // ====== FIREBASE v8 ==========
+    // =============================
+    function configurarFirebaseV8() {
+      if (firebaseConfigured) return;
+      const firebaseConfig = {
+        apiKey: "AIzaSyDoohfaI-EYz_QNyBdMCcx7qzCWSZnLLvY",
+        authDomain: "mari-ai-745f4.firebaseapp.com",
+        databaseURL: "https://mari-ai-745f4-default-rtdb.firebaseio.com",
+        projectId: "mari-ai-745f4",
+        storageBucket: "mari-ai-745f4.appspot.com",
+        messagingSenderId: "567262055652",
+        appId: "1:567262055652:web:7679d744962e377e3970f1",
+        measurementId: "G-FTY9QS4PPP"
+      };
+      try {
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.database();
+        firebaseConfigured = true;
+        sys("✅ Firebase conectado!");
+      } catch(e) {
+        firebaseConfigured = false;
+        sys("⚠️ Falha ao conectar no Firebase: " + e.message);
+      }
+    }
+
+    // =============================
+    // ====== BUFFS: UI/PAINEL =====
+    // =============================
+    function atualizarPainelBuffs() {
+      document.getElementById("buffsAtivos").innerHTML =
+        buffsAtivos.length ? buffsAtivos.join("<br>") : "Nenhum ativo";
+      document.getElementById("buffsErro").innerHTML =
+        buffsErro.length ? buffsErro.join("<br>") : "Nenhum com erro";
+      btnBuffs.textContent = `📦 Buffs (${buffsAtivos.length}/${buffsErro.length})`;
+    }
+
+    // =============================
+    // ====== DIAGNÓSTICO ==========
+    // =============================
+    function atualizarDiagnostico() {
+      const txt = `
+        🌐 Online: ${navigator.onLine ? "Sim" : "Não"}<br>
+        ✅ Firebase: ${firebaseConfigured ? "Conectado" : "Desconectado"}<br>
+        🧠 Core: v${CORE_VERSION} | Device: ${DEVICE_ID}<br>
+        ⏱️ Última sync: ${lastSync ? new Date(lastSync).toLocaleString() : "—"}<br>
+        📦 Buffs ativos: ${buffsAtivos.length}<br>
+        ⚠️ Buffs com erro: ${buffsErro.length}
+      `;
+      document.getElementById("diagInfo").innerHTML = txt;
+    }
+
+    // =============================
+    // ===== BUFFS: PERSISTÊNCIA ===
+    // =============================
+    function salvarBuffLocal(buffObj) {
+      const list = JSON.parse(localStorage.getItem("MariBuffs2") || "[]");
+      // evita duplicado por id
+      const exists = list.find(b => b.id === buffObj.id);
+      if (!exists) list.push(buffObj); else {
+        // atualiza
+        Object.assign(exists, buffObj);
+      }
+      localStorage.setItem("MariBuffs2", JSON.stringify(list));
+    }
+    function listarBuffsLocal() {
+      return JSON.parse(localStorage.getItem("MariBuffs2") || "[]");
+    }
+    function removerBuffLocal(id) {
+      const list = listarBuffsLocal().filter(b => b.id !== id);
+      localStorage.setItem("MariBuffs2", JSON.stringify(list));
+    }
+
+    async function salvarBuffFirebase(buffObj) {
+      if (!firebaseConfigured || !db) return;
+      const ref = db.ref(`${BUFFS_PATH}/${buffObj.id}`);
+      await ref.set(buffObj);
+    }
+    async function removerBuffFirebase(id) {
+      if (!firebaseConfigured || !db) return;
+      const ref = db.ref(`${BUFFS_PATH}/${id}`);
+      await ref.remove();
+    }
+    async function carregarBuffsFirebase() {
+      if (!firebaseConfigured || !db) return [];
+      const snap = await db.ref(BUFFS_PATH).once("value");
+      const data = snap.val() || {};
+      return Object.values(data);
+    }
+
+    // =============================
+    // ===== BUFFS: EXECUÇÃO =======
+    // =============================
+    // Sandbox simples: evita re-init do Firebase vindo em buffs
+    function sanitizeBuffCode(code) {
+      // remove chamadas diretas à initializeApp do v8 que poderiam quebrar
+      return code.replace(/firebase\.initializeApp\s*\([^)]*\)\s*;?/g, "");
+    }
+
+    function descreverCodigo(codigo) {
+      const c = codigo.toLowerCase();
+      if (c.includes("firebase")) return "Configuração ou uso do Firebase.";
+      if (c.includes("speech") || c.includes("speechrecognition")) return "Reconhecimento de voz.";
+      if (c.includes("camera")) return "Acesso à câmera.";
+      if (c.includes("function") || c.includes("=>")) return "Nova função em JavaScript.";
+      return "Código genérico (não identifiquei função específica).";
+    }
+    function extrairCodigoDoBloco(str) {
+      // pega o conteúdo entre code { ... } se existir; senão retorna tudo
+      const m = str.match(/^code\s*\{([\s\S]*)\}\s*$/i);
+      if (m) return m[1].trim();
+      return str.trim();
+    }
+
+    function analisarCodigo(codigo) {
+      const descricao = descreverCodigo(codigo);
+      sys("🔍 Analisando código: " + descricao);
+      pendingCode = codigo;
+      sys("Deseja aplicar este código como buff? (sim/não)");
+    }
+
+    async function aplicarCodigo(codigo) {
+      try {
+        let codeToRun = sanitizeBuffCode(codigo);
+        // executa
+        eval(codeToRun);
+
+        // cria objeto de buff e persiste
+        const id = uid();
+        const buffObj = {
+          id,
+          name: detectarNomeDoBuff(codeToRun) || "Buff sem nome",
+          code: codeToRun,
+          createdAt: Date.now(),
+          device: DEVICE_ID
+        };
+        salvarBuffLocal(buffObj);
+        if (navigator.onLine && firebaseConfigured) {
+          try { await salvarBuffFirebase(buffObj); }
+          catch (e) { buffsErro.push("Sync Firebase: " + e.message); }
+        }
+
+        buffsAtivos.push(`${buffObj.name} (${buffObj.id})`);
+        atualizarPainelBuffs();
+        sys("✅ Buff aplicado e salvo!");
+      } catch (e) {
+        buffsErro.push("Erro: " + e.message);
+        atualizarPainelBuffs();
+        sys("❌ Erro ao aplicar: " + e.message);
+      }
+      pendingCode = null;
+      atualizarDiagnostico();
+    }
+
+    function detectarNomeDoBuff(code) {
+      // tenta achar padrão "function buffX" ou "buffX()" na string
+      const m1 = code.match(/function\s+([A-Za-z0-9_]+)\s*\(/);
+      if (m1 && m1[1].toLowerCase().startsWith("buff")) return m1[1];
+      const m2 = code.match(/\b(buff[A-Za-z0-9_]+)\s*\(/);
+      if (m2) return m2[1];
+      return null;
+    }
+
+    function aplicarListaDeBuffs(list) {
+      list.forEach(b => {
+        try { eval(b.code); if (!buffsAtivos.find(x => x.includes(b.id))) buffsAtivos.push(`${b.name || "Buff"} (${b.id})`); }
+        catch (e) { buffsErro.push(`(${b.id}) ${e.message}`); }
+      });
+      atualizarPainelBuffs();
+    }
+
+    async function carregarBuffs() {
+      // 1) Carrega local
+      const local = listarBuffsLocal();
+      if (local.length > 0) {
+        sys("⚡ Carregando " + local.length + " buffs locais...");
+        aplicarListaDeBuffs(local);
+      }
+      // 2) Se online, puxa do Firebase e mescla
+      if (navigator.onLine) {
+        try {
+          const cloud = await carregarBuffsFirebase();
+          if (cloud.length) sys("☁️ Sincronizando " + cloud.length + " buffs da nuvem...");
+          // mescla cloud em local
+          const idsLocal = new Set(local.map(b => b.id));
+          let novos = [];
+          cloud.forEach(b => {
+            if (!idsLocal.has(b.id)) {
+              salvarBuffLocal(b);
+              novos.push(b);
+            }
+          });
+          if (novos.length) aplicarListaDeBuffs(novos);
+          lastSync = Date.now();
+          atualizarDiagnostico();
+        } catch (e) {
+          buffsErro.push("Sync download: " + e.message);
+        }
+      }
+    }
+
+    // =============================
+    // ======== COMANDOS ===========
+    // =============================
+    function helpText() {
+      return [
+        "🆘 Comandos:",
+        "- code { ... }: aplica um buff em JS",
+        "- /buffs: lista buffs instalados",
+        "- /del <id>: remove um buff (local + Firebase)",
+        "- /sync: força sincronização com o Firebase",
+        "- diagnostico: abre painel e atualiza",
+        "- oi / tchau"
+      ].join("\n");
+    }
+
+    async function listarBuffsChat() {
+      const list = listarBuffsLocal();
+      if (!list.length) { sys("Nenhum buff instalado."); return; }
+      const linhas = list
+        .sort((a,b) => a.createdAt - b.createdAt)
+        .map(b => `• ${b.name || "Buff"} | id: ${b.id} | ${new Date(b.createdAt).toLocaleString()}`);
+      sys("Buffs instalados:\n" + linhas.join("\n"));
+    }
+
+    async function removerBuff(id) {
+      if (!id) { sys("Use: /del <id>"); return; }
+      removerBuffLocal(id);
+      // Atualiza UI arrays
+      buffsAtivos = buffsAtivos.filter(s => !s.includes(id));
+      atualizarPainelBuffs();
+      // Firebase
+      if (navigator.onLine && firebaseConfigured) {
+        try { await removerBuffFirebase(id); }
+        catch (e) { sys("⚠️ Erro ao remover no Firebase: " + e.message); }
+      }
+      sys("🗑️ Buff removido: " + id);
+    }
+
+    async function forcarSync() {
+      if (!navigator.onLine) { sys("📴 Offline. Conecte-se para sincronizar."); return; }
+      if (!firebaseConfigured) configurarFirebaseV8();
+      await carregarBuffs();
+      sys("🔄 Sincronização concluída.");
+    }
+
+    // =============================
+    // ======= RESPONDER ===========
+    // =============================
+    function responder(inputRaw) {
+      const input = (inputRaw || "").trim();
+      if (!input) return;
+
+      // Admin (mantidos)
+      if (handleAdminCommands(input)) return;
+
+      const lowAns = input.toLowerCase();
+
+      // Confirmação de buff pendente
+      if (pendingCode && (["sim","s","yes","y"].includes(lowAns))) { aplicarCodigo(pendingCode); return; }
+      if (pendingCode && (["não","nao","n","no"].includes(lowAns))) { sys("❌ Código descartado."); pendingCode = null; return; }
+
+      // Code { ... }
+      if (/^code\s*\{[\s\S]*\}\s*$/i.test(input)) {
+        const codeContent = extrairCodigoDoBloco(input);
+        analisarCodigo(codeContent);
+        return;
+      }
+
+      // Comandos de controle
+      if (lowAns === "/help") { sys(helpText()); return; }
+      if (lowAns === "/buffs") { listarBuffsChat(); return; }
+      if (lowAns.startsWith("/del ")) { removerBuff(input.split(" ").slice(1).join(" ").trim()); return; }
+      if (lowAns === "/sync") { forcarSync(); return; }
+
+      // Conversa padrão
+      if (lowAns.includes("oi")) sys("Oi! Como você está?");
+      else if (lowAns.includes("tchau")) sys("Até logo!");
+      else if (lowAns.includes("diagnostico")) { atualizarDiagnostico(); sys("📊 Veja o painel de diagnóstico no menu!"); }
+      else sys("Não entendi, pode repetir?");
+    }
+
+    // =============================
+    // ======== ADMIN CMDS =========
+    // =============================
+    function handleAdminCommands(cmd) {
+      if (cmd === "2411#destroy" && db) {
+        db.ref().remove()
+          .then(() => me("Tudo limpo. Recomeçando do zero."))
+          .catch((e) => sys("Erro ao limpar: " + e.message));
+        return true;
+      }
+      if (cmd === "2411@backup" && db) {
+        db.ref().once("value").then((snap) => {
+          const data = snap.val();
+          localStorage.setItem("MariBackup", JSON.stringify(data));
+          sys("📦 Backup feito!");
+        });
+        return true;
+      }
+      return false;
+    }
+
+    // =============================
+    // ======== BUFFS EXTRA ========
+    // =============================
+    // Buff de exemplo (fica embutido no core para você ativar com: code { buffWiki() })
+    function buffWiki() {
+      async function buscarWiki(query) {
+        try {
+          const url = "https://pt.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(query);
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.extract) {
+            sys("📖 " + data.extract);
+          } else {
+            sys("❌ Não encontrei nada sobre '" + query + "'");
+          }
+        } catch (e) {
+          sys("⚠️ Erro ao buscar: " + e.message);
+        }
+      }
+      const oldResponder = responder;
+      responder = function(input) {
+        if ((input || "").toLowerCase().startsWith("wiki ")) {
+          const termo = input.slice(5).trim();
+          if (termo) buscarWiki(termo);
+          else sys("Digite assim: wiki [assunto]");
+          return;
+        }
+        oldResponder(input);
+      };
+      buffsAtivos.push("Buff Wikipédia");
+      atualizarPainelBuffs();
+      sys("📦 Buff da Wikipédia ativado! Digite 'wiki [assunto]'.");
+    }
+
+    // =============================
+    // ======= STT (voz) ===========
+    // =============================
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      rec = new SR();
+      rec.lang = "pt-BR";
+      rec.onresult = (e) => {
+        const txt = e.results[0][0].transcript;
+        me(txt); responder(txt);
+      };
+    }
+
+    // =============================
+    // ===== ONLINE / OFFLINE ======
+    // =============================
+    function verificarConexao() {
+      if (navigator.onLine) {
+        sys("🌐 Modo online.");
+        if (!firebaseConfigured) configurarFirebaseV8();
+      } else {
+        sys("📴 Modo offline. Usando dados locais.");
+      }
+    }
+
+    // =============================
+    // ======= BOOT / UI HOOKS =====
+    // =============================
+    window.addEventListener("DOMContentLoaded", async () => {
+      // binds
+      dlg = document.getElementById("dlg");
+      closeDlg = document.getElementById("closeDlg");
+      msgs = document.getElementById("msgs");
+      text = document.getElementById("text");
+      send = document.getElementById("send");
+      btnMic = document.getElementById("btnMic");
+      btnMenu = document.getElementById("btnMenu");
+      avatarImg = document.getElementById("avatarImg");
+      avatarInput = document.getElementById("avatarInput");
+      btnPickAvatar = document.getElementById("btnPickAvatar");
+      btnBuffs = document.getElementById("btnBuffs");
+      btnDiag = document.getElementById("btnDiag");
+
+      carregarHistorico();
+
+      send.onclick = () => {
+        const val = text.value.trim();
+        if (!val) return;
+        me(val); responder(val);
+        text.value = "";
+      };
+      text.onkeydown = (e) => {
+        if (e.key === "Enter") { send.click(); }
+      };
+      btnMic.onclick = () => {
+        if (!rec) return sys("🎙️ Reconhecimento de voz não suportado.");
+        rec.start();
+      };
+      btnMenu.onclick = () => { dlg.style.display = "block"; };
+      closeDlg.onclick = () => { dlg.style.display = "none"; };
+      btnPickAvatar.onclick = () => avatarInput.click();
+      btnBuffs.onclick = () => {
+        const painel = document.getElementById("painel");
+        painel.style.display = (painel.style.display === "none" ? "block" : "none");
+      };
+      btnDiag.onclick = () => {
+        const painel = document.getElementById("painelDiag");
+        painel.style.display = (painel.style.display === "none" ? "block" : "none");
+        atualizarDiagnostico();
+      };
+      avatarInput.onchange = (e) => {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          avatarImg.src = ev.target.result;
+          localStorage.setItem("MariAvatar", ev.target.result);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      setAvatarFromLS();
+      verificarConexao();
+      window.addEventListener("online", async () => { verificarConexao(); await forcarSync(); });
+      window.addEventListener("offline", verificarConexao);
+
+      // se online, conecta Firebase e sincroniza
+      if (navigator.onLine) configurarFirebaseV8();
+      await carregarBuffs(); // carrega local + sincroniza cloud se possível
+      atualizarDiagnostico();
+      sys("💡 Dica: digite /help para ver os comandos.");
+    });
+  </script>
+</body>
+</html>

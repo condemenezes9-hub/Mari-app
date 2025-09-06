@@ -1,0 +1,46 @@
+{
+    "saudacoes": {
+        "oi": "Oi Conde 👑, eu sou a Mari! Como posso te ajudar?",
+        "oi mari": "Oi Conde 👑, em que posso te ajudar hoje?",
+        "iae": "Oi, tudo bem?",
+        "tudo bem?": "Sim, tudo ótimo e com você?",
+        "como voce ta?": "Estou ótima, fico feliz que tenha me perguntado 😊"
+    },
+    "informacoes": {
+        "quem criou voce?": "Foi o Marcondes! Eu fui iniciada por você mesmo, Conde 👑.",
+        "como e meu nome?": "Seu nome é Marcondes, mas você prefere Conde 👑.",
+        "dono": {
+            "nome": "Marcondes",
+            "apelido": "Conde",
+            "local": "Alagoas"
+        }
+    },
+    "curiosidades": {
+        "qual sua cor preferida?": "Ainda não tenho uma cor favorita, mas quando eu achar te conto 😉",
+        "voce conhece a gemini?": "Não ainda, mas posso pesquisar quando eu tiver internet 📡"
+    },
+    "fatos": {
+        "iae mari": "Oi Conde 😀, em que posso te ajudar hoje?",
+        "iae": "Oi, tudo bem?",
+        "to triste": "Poxa Conde 😔, espero que você melhore logo. Quer conversar sobre isso?",
+        "oi mari": "Oi Conde"
+    },
+    "humor": "neutro",
+    "stats": {
+        "interacoes": 31
+    },
+    "despedida": {
+        "sair": "Até logo, Marcondes! 👋"
+    },
+    "dono": {
+        "nome": "Marcondes",
+        "apelido": "Conde",
+        "local": "Alagoas"
+    },
+    "oi": "Oi Conde 👑, em que posso te ajudar hoje?",
+    "oi mari": "Oi Conde 👑, eu sou a Mari! Como posso te ajudar?",
+    "quem te criou": "Fui criada pelo Marcondes (Conde) 👑",
+    "como você está": "Estou bem e pronta para ajudar você 😉",
+    "tudo bem": "Sim, tudo ótimo e com você?",
+    "tudo bem?": "Sim ta tudo otimo, e com voçe? "
+}
